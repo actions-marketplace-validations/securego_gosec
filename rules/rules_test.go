@@ -103,10 +103,6 @@ var _ = Describe("gosec rules", func() {
 			runner("G112", testutils.SampleCodeG112)
 		})
 
-		It("should detect potential uncontrolled memory consumption in Rat.SetString", func() {
-			runner("G113", testutils.SampleCodeG113)
-		})
-
 		It("should detect uses of net/http serve functions that have no support for setting timeouts", func() {
 			runner("G114", testutils.SampleCodeG114)
 		})
@@ -171,6 +167,22 @@ var _ = Describe("gosec rules", func() {
 			runner("G404", testutils.SampleCodeG404)
 		})
 
+		It("should detect weak crypto algorithms", func() {
+			runner("G405", testutils.SampleCodeG405)
+		})
+
+		It("should detect weak crypto algorithms", func() {
+			runner("G405", testutils.SampleCodeG405b)
+		})
+
+		It("should detect weak crypto algorithms", func() {
+			runner("G406", testutils.SampleCodeG406)
+		})
+
+		It("should detect weak crypto algorithms", func() {
+			runner("G406", testutils.SampleCodeG406b)
+		})
+
 		It("should detect blocklisted imports - MD5", func() {
 			runner("G501", testutils.SampleCodeG501)
 		})
@@ -191,12 +203,19 @@ var _ = Describe("gosec rules", func() {
 			runner("G505", testutils.SampleCodeG505)
 		})
 
-		It("should detect implicit aliasing in ForRange", func() {
-			runner("G601", testutils.SampleCodeG601)
+		It("should detect blocklisted imports - MD4", func() {
+			runner("G506", testutils.SampleCodeG506)
 		})
 
-		It("should detect out of bounds slice access", func() {
-			runner("G602", testutils.SampleCodeG602)
+		It("should detect blocklisted imports - RIPEMD160", func() {
+			runner("G507", testutils.SampleCodeG507)
+		})
+
+		It("should detect implicit aliasing in ForRange", func() {
+			major, minor, _ := gosec.GoVersion()
+			if major <= 1 && minor < 22 {
+				runner("G601", testutils.SampleCodeG601)
+			}
 		})
 	})
 })

@@ -17,14 +17,8 @@ var _ = Describe("Helpers", func() {
 	Context("when listing package paths", func() {
 		var dir string
 		JustBeforeEach(func() {
-			var err error
-			dir, err = os.MkdirTemp("", "gosec")
-			Expect(err).ShouldNot(HaveOccurred())
-			_, err = os.MkdirTemp(dir, "test*.go")
-			Expect(err).ShouldNot(HaveOccurred())
-		})
-		AfterEach(func() {
-			err := os.RemoveAll(dir)
+			dir = GinkgoT().TempDir()
+			_, err := os.MkdirTemp(dir, "test*.go")
 			Expect(err).ShouldNot(HaveOccurred())
 		})
 		It("should return the root directory as package path", func() {
@@ -346,6 +340,28 @@ var _ = Describe("Helpers", func() {
 
 			operands := gosec.GetBinaryExprOperands(be)
 			Expect(operands).Should(HaveLen(4))
+		})
+	})
+
+	Context("when transforming build tags to cli build flags", func() {
+		It("should return an empty slice when no tags are provided", func() {
+			result := gosec.CLIBuildTags([]string{})
+			Expect(result).To(BeEmpty())
+		})
+
+		It("should return a single -tags flag when one tag is provided", func() {
+			result := gosec.CLIBuildTags([]string{"integration"})
+			Expect(result).To(Equal([]string{"-tags=integration"}))
+		})
+
+		It("should combine multiple tags into a single -tags flag", func() {
+			result := gosec.CLIBuildTags([]string{"linux", "amd64", "netgo"})
+			Expect(result).To(Equal([]string{"-tags=linux,amd64,netgo"}))
+		})
+
+		It("should trim and ignore empty tags", func() {
+			result := gosec.CLIBuildTags([]string{" linux ", "", "amd64"})
+			Expect(result).To(Equal([]string{"-tags=linux,amd64"}))
 		})
 	})
 })

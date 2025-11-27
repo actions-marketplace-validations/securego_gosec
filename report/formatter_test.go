@@ -51,9 +51,9 @@ func createReportInfo(rule string, weakness *cwe.Weakness) gosec.ReportInfo {
 }
 
 func stripString(str string) string {
-	ret := strings.Replace(str, "\n", "", -1)
-	ret = strings.Replace(ret, " ", "", -1)
-	ret = strings.Replace(ret, "\t", "", -1)
+	ret := strings.ReplaceAll(str, "\n", "")
+	ret = strings.ReplaceAll(ret, " ", "")
+	ret = strings.ReplaceAll(ret, "\t", "")
 	return ret
 }
 
@@ -278,11 +278,40 @@ var _ = Describe("Formatter", func() {
 	})
 	Context("When using different report formats", func() {
 		grules := []string{
-			"G101", "G102", "G103", "G104", "G106", "G107", "G109",
-			"G110", "G111", "G112", "G113", "G201", "G202", "G203",
-			"G204", "G301", "G302", "G303", "G304", "G305", "G401",
-			"G402", "G403", "G404", "G501", "G502", "G503", "G504",
-			"G505", "G601",
+			"G101",
+			"G102",
+			"G103",
+			"G104",
+			"G106",
+			"G107",
+			"G109",
+			"G110",
+			"G111",
+			"G112",
+			"G201",
+			"G202",
+			"G203",
+			"G204",
+			"G301",
+			"G302",
+			"G303",
+			"G304",
+			"G305",
+			"G401",
+			"G402",
+			"G403",
+			"G404",
+			"G405",
+			"G406",
+			"G407",
+			"G501",
+			"G502",
+			"G503",
+			"G504",
+			"G505",
+			"G506",
+			"G507",
+			"G601",
 		}
 
 		It("csv formatted report should contain the CWE mapping", func() {
@@ -310,7 +339,7 @@ var _ = Describe("Formatter", func() {
 				reportInfo := gosec.NewReportInfo([]*issue.Issue{&newissue}, &gosec.Metrics{NumFiles: 0, NumLines: 0, NumNosec: 0, NumFound: 0}, errors).WithVersion("v2.7.0")
 				err := CreateReport(buf, "xml", false, []string{}, reportInfo)
 				Expect(err).ShouldNot(HaveOccurred())
-				pattern := "Results:\n\n\n[/home/src/project/test.go:1] - %s (CWE-%s): test (Confidence: HIGH, Severity: HIGH)\n  > 1: testcode\n\n\n\nSummary:\n  Gosec  : v2.7.0\n  Files  : 0\n  Lines  : 0\n  Nosec  : 0\n  Issues : 0\n\n"
+				pattern := "Results:\n\n\n[/home/src/project/test.go:1] - %s (CWE-%s): test (Confidence: HIGH, Severity: HIGH)\n  > 1: testcode\n\nAutofix: \n\nSummary:\n  Gosec  : v2.7.0\n  Files  : 0\n  Lines  : 0\n  Nosec  : 0\n  Issues : 0\n\n"
 				expect := fmt.Sprintf(pattern, rule, cwe.ID)
 				Expect(buf.String()).To(Equal(expect))
 			}

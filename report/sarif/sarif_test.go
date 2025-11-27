@@ -23,6 +23,43 @@ var _ = Describe("Sarif Formatter", func() {
 			result := buf.String()
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(result).To(ContainSubstring("\"results\": ["))
+			sarifReport, err := sarif.GenerateReport([]string{}, reportInfo)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(validateSarifSchema(sarifReport)).To(Succeed())
+		})
+
+		It("sarif formatted report should contain proper autofix", func() {
+			ruleID := "G101"
+			cwe := issue.GetCweByRule(ruleID)
+			autofixIssue := []*issue.Issue{
+				{
+					File:       "/home/src/project/test.go",
+					Line:       "1",
+					Col:        "1",
+					RuleID:     ruleID,
+					What:       "test",
+					Confidence: issue.High,
+					Severity:   issue.High,
+					Code:       "1: testcode",
+					Cwe:        cwe,
+					Suppressions: []issue.SuppressionInfo{
+						{
+							Kind:          "inSource",
+							Justification: "justification",
+						},
+					},
+					Autofix: "some random autofix",
+				},
+			}
+			reportInfo := gosec.NewReportInfo(autofixIssue, &gosec.Metrics{}, map[string][]gosec.Error{}).WithVersion("v2.7.0")
+			buf := new(bytes.Buffer)
+			err := sarif.WriteReport(buf, reportInfo, []string{})
+			result := buf.String()
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(result).To(ContainSubstring("\"results\": ["))
+			sarifReport, err := sarif.GenerateReport([]string{}, reportInfo)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(validateSarifSchema(sarifReport)).To(Succeed())
 		})
 
 		It("sarif formatted report should contain the suppressed results", func() {
@@ -40,7 +77,7 @@ var _ = Describe("Sarif Formatter", func() {
 				Cwe:        cwe,
 				Suppressions: []issue.SuppressionInfo{
 					{
-						Kind:          "kind",
+						Kind:          "inSource",
 						Justification: "justification",
 					},
 				},
@@ -57,6 +94,9 @@ var _ = Describe("Sarif Formatter", func() {
 
 			hasSuppressions, _ := regexp.MatchString(`"suppressions": \[(\s*){`, result)
 			Expect(hasSuppressions).To(BeTrue())
+			sarifReport, err := sarif.GenerateReport([]string{}, reportInfo)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(validateSarifSchema(sarifReport)).To(Succeed())
 		})
 		It("sarif formatted report should contain the formatted one line code snippet", func() {
 			ruleID := "G101"
@@ -75,7 +115,7 @@ var _ = Describe("Sarif Formatter", func() {
 				Cwe:        cwe,
 				Suppressions: []issue.SuppressionInfo{
 					{
-						Kind:          "kind",
+						Kind:          "inSource",
 						Justification: "justification",
 					},
 				},
@@ -84,6 +124,7 @@ var _ = Describe("Sarif Formatter", func() {
 			sarifReport, err := sarif.GenerateReport([]string{}, reportInfo)
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(sarifReport.Runs[0].Results[0].Locations[0].PhysicalLocation.Region.Snippet.Text).Should(Equal(expectedCode))
+			Expect(validateSarifSchema(sarifReport)).To(Succeed())
 		})
 		It("sarif formatted report should contain the formatted multiple line code snippet", func() {
 			ruleID := "G101"
@@ -102,7 +143,7 @@ var _ = Describe("Sarif Formatter", func() {
 				Cwe:        cwe,
 				Suppressions: []issue.SuppressionInfo{
 					{
-						Kind:          "kind",
+						Kind:          "inSource",
 						Justification: "justification",
 					},
 				},
@@ -111,6 +152,7 @@ var _ = Describe("Sarif Formatter", func() {
 			sarifReport, err := sarif.GenerateReport([]string{}, reportInfo)
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(sarifReport.Runs[0].Results[0].Locations[0].PhysicalLocation.Region.Snippet.Text).Should(Equal(expectedCode))
+			Expect(validateSarifSchema(sarifReport)).To(Succeed())
 		})
 		It("sarif formatted report should have proper rule index", func() {
 			rules := []string{"G404", "G101", "G102", "G103"}
@@ -128,7 +170,7 @@ var _ = Describe("Sarif Formatter", func() {
 					Cwe:        cwe,
 					Suppressions: []issue.SuppressionInfo{
 						{
-							Kind:          "kind",
+							Kind:          "inSource",
 							Justification: "justification",
 						},
 					},
@@ -150,7 +192,7 @@ var _ = Describe("Sarif Formatter", func() {
 					Cwe:        cwe,
 					Suppressions: []issue.SuppressionInfo{
 						{
-							Kind:          "kind",
+							Kind:          "inSource",
 							Justification: "justification",
 						},
 					},
@@ -171,6 +213,7 @@ var _ = Describe("Sarif Formatter", func() {
 				driverRuleIndexes[rule.ID] = ruleIndex
 			}
 			Expect(resultRuleIndexes).Should(Equal(driverRuleIndexes))
+			Expect(validateSarifSchema(sarifReport)).To(Succeed())
 		})
 	})
 })
