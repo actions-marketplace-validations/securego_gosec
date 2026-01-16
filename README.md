@@ -144,6 +144,21 @@ jobs:
           sarif_file: results.sarif
 ```
 
+### Go Analysis
+
+The `goanalysis` package provides a [`golang.org/x/tools/go/analysis.Analyzer`](https://pkg.go.dev/golang.org/x/tools/go/analysis) for integration with tools that support the standard Go analysis interface, such as Bazel's [nogo](https://github.com/bazelbuild/rules_go/blob/master/go/nogo.rst) framework:
+
+```starlark
+nogo(
+    name = "nogo",
+    deps = [
+        "@com_github_securego_gosec_v2//goanalysis",
+        # add more analyzers as needed
+    ],
+    visibility = ["//visibility:public"],
+)
+```
+
 ### Local Installation
 
 ```bash
@@ -245,6 +260,45 @@ A number of global settings can be provided in a configuration file as follows:
 # Run with a global configuration file
 $ gosec -conf config.json .
 ```
+
+### Path-Based Rule Exclusions
+
+Large repositories with multiple components may need different security rules
+for different paths. Use `exclude-rules` to suppress specific rules for specific
+paths.
+
+**Configuration File:**
+```json
+{
+  "exclude-rules": [
+    {
+      "path": "cmd/.*",
+      "rules": ["G204", "G304"]
+    },
+    {
+      "path": "scripts/.*",
+      "rules": ["*"]
+    }
+  ]
+}
+```
+
+**CLI Flag:**
+```bash
+# Exclude G204 and G304 from cmd/ directory
+gosec --exclude-rules="cmd/.*:G204,G304" ./...
+
+# Exclude all rules from scripts/ directory  
+gosec --exclude-rules="scripts/.*:*" ./...
+
+# Multiple exclusions
+gosec --exclude-rules="cmd/.*:G204,G304;test/.*:G101" ./...
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string (regex) | Regular expression matched against file paths |
+| `rules` | []string | Rule IDs to exclude. Use `*` to exclude all rules |
 
 #### Rule Configuration
 
