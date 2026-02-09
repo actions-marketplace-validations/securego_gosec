@@ -32,6 +32,12 @@ type secretPattern struct {
 	regexp *regexp.Regexp
 }
 
+// entropyCacheKey is the cache key for entropy analysis results.
+type entropyCacheKey string
+
+// secretPatternCacheKey is the cache key for secret pattern scan results.
+type secretPatternCacheKey string
+
 var secretsPatterns = [...]secretPattern{
 	{
 		name:   "RSA private key",
@@ -78,49 +84,25 @@ var secretsPatterns = [...]secretPattern{
 		regexp: regexp.MustCompile(`ghs_[a-zA-Z0-9]{36}`),
 	},
 	{
-		name:   "Google API Key",
+		name:   "Google API Key", // Also Google Cloud Platform, Gmail, Drive, YouTube, etc.
 		regexp: regexp.MustCompile(`AIza[0-9A-Za-z\-_]{35}`),
 	},
+
 	{
-		name:   "Google Cloud Platform API Key",
-		regexp: regexp.MustCompile(`AIza[0-9A-Za-z\-_]{35}`),
-	},
-	{
-		name:   "Google Cloud Platform OAuth",
+		name:   "Google Cloud Platform OAuth", // Also Gmail, Drive, YouTube, etc.
 		regexp: regexp.MustCompile(`[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com`),
 	},
-	{
-		name:   "Google Drive API Key",
-		regexp: regexp.MustCompile(`AIza[0-9A-Za-z\-_]{35}`),
-	},
-	{
-		name:   "Google Drive OAuth",
-		regexp: regexp.MustCompile(`[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com`),
-	},
+
 	{
 		name:   "Google (GCP) Service-account",
 		regexp: regexp.MustCompile(`"type": "service_account"`),
 	},
-	{
-		name:   "Google Gmail API Key",
-		regexp: regexp.MustCompile(`AIza[0-9A-Za-z\-_]{35}`),
-	},
-	{
-		name:   "Google Gmail OAuth",
-		regexp: regexp.MustCompile(`[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com`),
-	},
+
 	{
 		name:   "Google OAuth Access Token",
 		regexp: regexp.MustCompile(`ya29\.[0-9A-Za-z\-_]+`),
 	},
-	{
-		name:   "Google YouTube API Key",
-		regexp: regexp.MustCompile(`AIza[0-9A-Za-z\-_]{35}`),
-	},
-	{
-		name:   "Google YouTube OAuth",
-		regexp: regexp.MustCompile(`[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com`),
-	},
+
 	{
 		name:   "Generic API Key",
 		regexp: regexp.MustCompile(`[aA][pP][iI]_?[kK][eE][yY].*[''|"][0-9a-zA-Z]{32,45}[''|"]`),
@@ -143,7 +125,7 @@ var secretsPatterns = [...]secretPattern{
 	},
 	{
 		name:   "Password in URL",
-		regexp: regexp.MustCompile(`[a-zA-Z]{3,10}://[^/\\s:@]{3,20}:[^/\\s:@]{3,20}@.{1,100}["'\\s]`),
+		regexp: regexp.MustCompile(`[a-zA-Z]{3,10}://[a-zA-Z0-9\.\-\_\+]{1,64}:[a-zA-Z0-9\.\-\_\!\$\%\&\*\+\=\^\(\)]{1,128}@[a-zA-Z0-9\.\-\_]+(:[0-9]+)?(/[^"'\s]*)?(["'\s]|$)`),
 	},
 	{
 		name:   "Slack Webhook",
@@ -190,6 +172,7 @@ type credentials struct {
 	perCharThreshold float64
 	truncate         int
 	ignoreEntropy    bool
+	minEntropyLength int
 }
 
 func truncate(s string, n int) string {
@@ -200,20 +183,45 @@ func truncate(s string, n int) string {
 }
 
 func (r *credentials) isHighEntropyString(str string) bool {
+	if len(str) < r.minEntropyLength {
+		return false
+	}
 	s := truncate(str, r.truncate)
+	key := entropyCacheKey(s)
+	if val, ok := gosec.GlobalCache.Get(key); ok {
+		return val.(bool)
+	}
+
 	info := zxcvbn.PasswordStrength(s, []string{})
 	entropyPerChar := info.Entropy / float64(len(s))
-	return (info.Entropy >= r.entropyThreshold ||
+	res := (info.Entropy >= r.entropyThreshold ||
 		(info.Entropy >= (r.entropyThreshold/2) &&
 			entropyPerChar >= r.perCharThreshold))
+	gosec.GlobalCache.Add(key, res)
+	return res
+}
+
+type secretResult struct {
+	ok          bool
+	patternName string
 }
 
 func (r *credentials) isSecretPattern(str string) (bool, string) {
+	if len(str) < r.minEntropyLength {
+		return false, ""
+	}
+	key := secretPatternCacheKey(str)
+	if res, ok := gosec.GlobalCache.Get(key); ok {
+		secretRes := res.(secretResult)
+		return secretRes.ok, secretRes.patternName
+	}
 	for _, pattern := range secretsPatterns {
-		if pattern.regexp.MatchString(str) {
+		if gosec.RegexMatchWithCache(pattern.regexp, str) {
+			gosec.GlobalCache.Add(key, secretResult{true, pattern.name})
 			return true, pattern.name
 		}
 	}
+	gosec.GlobalCache.Add(key, secretResult{false, ""})
 	return false, ""
 }
 
@@ -235,7 +243,7 @@ func (r *credentials) matchAssign(assign *ast.AssignStmt, ctx *gosec.Context) (*
 	for _, i := range assign.Lhs {
 		if ident, ok := i.(*ast.Ident); ok {
 			// First check LHS to find anything being assigned to variables whose name appears to be a cred
-			if r.pattern.MatchString(ident.Name) {
+			if gosec.RegexMatchWithCache(r.pattern, ident.Name) {
 				for _, e := range assign.Rhs {
 					if val, err := gosec.GetString(e); err == nil {
 						if r.ignoreEntropy || (!r.ignoreEntropy && r.isHighEntropyString(val)) {
@@ -267,7 +275,7 @@ func (r *credentials) matchValueSpec(valueSpec *ast.ValueSpec, ctx *gosec.Contex
 	// Running match against the variable name(s) first. Will catch any creds whose var name matches the pattern,
 	// then will go back over to check the values themselves.
 	for index, ident := range valueSpec.Names {
-		if r.pattern.MatchString(ident.Name) && valueSpec.Values != nil {
+		if gosec.RegexMatchWithCache(r.pattern, ident.Name) && valueSpec.Values != nil {
 			// const foo, bar = "same value"
 			if len(valueSpec.Values) <= index {
 				index = len(valueSpec.Values) - 1
@@ -301,7 +309,7 @@ func (r *credentials) matchEqualityCheck(binaryExpr *ast.BinaryExpr, ctx *gosec.
 			ident, _ = binaryExpr.Y.(*ast.Ident)
 		}
 
-		if ident != nil && r.pattern.MatchString(ident.Name) {
+		if ident != nil && gosec.RegexMatchWithCache(r.pattern, ident.Name) {
 			valueNode := binaryExpr.Y
 			if !ok {
 				valueNode = binaryExpr.X
@@ -338,12 +346,12 @@ func (r *credentials) matchCompositeLit(lit *ast.CompositeLit, ctx *gosec.Contex
 			// Check if the key matches the credential pattern (struct field name or map string literal key)
 			matchedKey := false
 			if ident, ok := kv.Key.(*ast.Ident); ok {
-				if r.pattern.MatchString(ident.Name) {
+				if gosec.RegexMatchWithCache(r.pattern, ident.Name) {
 					matchedKey = true
 				}
 			}
 			if keyStr, err := gosec.GetString(kv.Key); err == nil {
-				if r.pattern.MatchString(keyStr) {
+				if gosec.RegexMatchWithCache(r.pattern, keyStr) {
 					matchedKey = true
 				}
 			}
@@ -378,6 +386,7 @@ func NewHardcodedCredentials(id string, conf gosec.Config) (gosec.Rule, []ast.No
 	perCharThreshold := 3.0
 	ignoreEntropy := false
 	truncateString := 16
+	minEntropyLength := 8
 	if val, ok := conf[id]; ok {
 		conf := val.(map[string]interface{})
 		if configPattern, ok := conf["pattern"]; ok {
@@ -412,6 +421,13 @@ func NewHardcodedCredentials(id string, conf gosec.Config) (gosec.Rule, []ast.No
 				}
 			}
 		}
+		if configMinEntropyLength, ok := conf["min_entropy_length"]; ok {
+			if cfgMinEntropyLength, ok := configMinEntropyLength.(string); ok {
+				if parsedInt, err := strconv.Atoi(cfgMinEntropyLength); err == nil {
+					minEntropyLength = parsedInt
+				}
+			}
+		}
 	}
 
 	return &credentials{
@@ -420,6 +436,7 @@ func NewHardcodedCredentials(id string, conf gosec.Config) (gosec.Rule, []ast.No
 		perCharThreshold: perCharThreshold,
 		ignoreEntropy:    ignoreEntropy,
 		truncate:         truncateString,
+		minEntropyLength: minEntropyLength,
 		MetaData:         issue.NewMetaData(id, "Potential hardcoded credentials", issue.High, issue.Low),
 	}, []ast.Node{(*ast.AssignStmt)(nil), (*ast.ValueSpec)(nil), (*ast.BinaryExpr)(nil), (*ast.CompositeLit)(nil)}
 }

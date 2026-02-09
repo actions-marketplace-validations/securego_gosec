@@ -29,7 +29,6 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -45,6 +44,11 @@ import (
 	"github.com/securego/gosec/v2/issue"
 )
 
+var (
+	ErrNoPackageTypeInfo = errors.New("package has no type information")
+	ErrNilPackage        = errors.New("nil package provided")
+)
+
 // LoadMode controls the amount of details to return when loading the packages
 const LoadMode = packages.NeedName |
 	packages.NeedFiles |
@@ -58,11 +62,11 @@ const LoadMode = packages.NeedName |
 	packages.NeedEmbedFiles |
 	packages.NeedEmbedPatterns
 
-const externalSuppressionJustification = "Globally suppressed."
-
-const aliasOfAllRules = "*"
-
-var directiveRegexp = regexp.MustCompile("^//gosec:disable(?: (.+))?$")
+const (
+	externalSuppressionJustification = "Globally suppressed."
+	aliasOfAllRules                  = "*"
+	directivePrefix                  = "//gosec:disable"
+)
 
 type ignore struct {
 	start        int
@@ -152,6 +156,7 @@ type Context struct {
 	Config       Config
 	Ignores      ignores
 	PassedValues map[string]any
+	callCache    map[ast.Node]callInfo
 }
 
 // GetFileAtNodePos returns the file at the node position in the file set available in the context.
@@ -444,6 +449,12 @@ func (gosec *Analyzer) checkRules(pkg *packages.Package) ([]*issue.Issue, *Metri
 	stats := &Metrics{}
 	allIgnores := newIgnores()
 
+	callCache := callCachePool.Get().(map[ast.Node]callInfo)
+	defer func() {
+		clear(callCache)
+		callCachePool.Put(callCache)
+	}()
+
 	visitor := &astVisitor{
 		gosec:             gosec,
 		issues:            make([]*issue.Issue, 0, 16),
@@ -481,6 +492,7 @@ func (gosec *Analyzer) checkRules(pkg *packages.Package) ([]*issue.Issue, *Metri
 			PkgFiles:     pkg.Syntax,
 			Imports:      NewImportTracker(),
 			PassedValues: make(map[string]any),
+			callCache:    callCache,
 		}
 
 		visitor.context = ctx
@@ -622,13 +634,13 @@ func (gosec *Analyzer) buildSSA(pkg *packages.Package) (*buildssa.SSA, error) {
 		}
 	}()
 	if pkg == nil {
-		return nil, errors.New("nil package provided")
+		return nil, ErrNilPackage
 	}
 	if pkg.Types == nil {
 		return nil, fmt.Errorf("package %s has no type information (compilation failed?)", pkg.Name)
 	}
 	if pkg.TypesInfo == nil {
-		return nil, fmt.Errorf("package %s has no type information", pkg.Name)
+		return nil, fmt.Errorf("%w: %s", ErrNoPackageTypeInfo, pkg.Name)
 	}
 	pass := &analysis.Pass{
 		Fset:             pkg.Fset,
@@ -719,30 +731,52 @@ func (gosec *Analyzer) AppendError(file string, err error) {
 // findNoSecDirective checks if the comment group contains `#nosec` or `//gosec:disable` directive.
 // If found, it returns true and the directive's arguments.
 func findNoSecDirective(group *ast.CommentGroup, noSecDefaultTag, noSecAlternativeTag string) (bool, string) {
-	// Check if the comment grounp has a nosec comment.
+	if group == nil {
+		return false, ""
+	}
+
+	// Join all comments in the group once to support multi-line nosec tags
+	text := group.Text()
+
+	// Check for nosec tags
 	for _, tag := range []string{noSecDefaultTag, noSecAlternativeTag} {
-		if found, args := findNoSecTag(group, tag); found {
+		if found, args := findNoSecTag(text, tag); found {
 			return true, args
 		}
 	}
 
-	// Check if the comment group has a directive comment.
+	// Check for directive comments individually
 	for _, c := range group.List {
-		match := directiveRegexp.FindStringSubmatch(c.Text)
-		if len(match) > 0 {
-			return true, match[0]
+		if after, ok := strings.CutPrefix(c.Text, directivePrefix); ok {
+			if len(after) == 0 || after[0] == ' ' {
+				return true, strings.TrimSpace(after)
+			}
 		}
 	}
 
 	return false, ""
 }
 
-func findNoSecTag(group *ast.CommentGroup, tag string) (bool, string) {
-	comment := strings.TrimSpace(group.Text())
+func findNoSecTag(text, tag string) (bool, string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false, ""
+	}
 
-	if strings.HasPrefix(comment, tag) || regexp.MustCompile("\n *"+tag).MatchString(comment) {
-		// Discard what's in front of the nosec tag.
-		return true, strings.SplitN(comment, tag, 2)[1]
+	if strings.HasPrefix(text, tag) {
+		return true, text[len(tag):]
+	}
+
+	if idx := strings.Index(text, tag); idx > 0 {
+		// Check if it's at the beginning of a line (possibly with space)
+		for i := idx - 1; i >= 0; i-- {
+			if text[i] == '\n' {
+				return true, text[idx+len(tag):]
+			}
+			if text[i] != ' ' && text[i] != '\t' {
+				break
+			}
+		}
 	}
 
 	return false, ""
@@ -786,14 +820,34 @@ func (v *astVisitor) updateIgnores() {
 
 // updateIgnoredRulesForNode parses comments for a specific node and updates ignored rules.
 func (v *astVisitor) updateIgnoredRulesForNode(n ast.Node) {
-	ignoredRules := v.ignore(n)
+	ignoredRules, group := v.ignore(n)
 	if len(ignoredRules) > 0 {
 		if v.context.Ignores == nil {
 			v.context.Ignores = newIgnores()
 		}
-		line := issue.GetLine(v.context.FileSet.File(n.Pos()), n)
+
+		// Calculate the range to include both the node and the comment group
+		// This handles cases where the comment is associated with a subsequent node
+		// but we still want to ignore the line where the comment is located.
+		startPos := n.Pos()
+		endPos := n.End()
+		if group != nil {
+			if group.Pos() < startPos {
+				startPos = group.Pos()
+			}
+			if group.End() > endPos {
+				endPos = group.End()
+			}
+		}
+
+		startLine := v.context.FileSet.File(startPos).Line(startPos)
+		endLine := v.context.FileSet.File(endPos).Line(endPos)
+		line := strconv.Itoa(startLine)
+		if startLine != endLine {
+			line = fmt.Sprintf("%d-%d", startLine, endLine)
+		}
 		v.context.Ignores.add(
-			v.context.FileSet.File(n.Pos()).Name(),
+			v.context.FileSet.File(startPos).Name(),
 			line,
 			ignoredRules,
 		)
@@ -801,13 +855,13 @@ func (v *astVisitor) updateIgnoredRulesForNode(n ast.Node) {
 }
 
 // ignore checks if a node is tagged with a nosec comment and returns the suppressed rules.
-func (v *astVisitor) ignore(n ast.Node) map[string]issue.SuppressionInfo {
+func (v *astVisitor) ignore(n ast.Node) (map[string]issue.SuppressionInfo, *ast.CommentGroup) {
 	if v.ignoreNosec {
-		return nil
+		return nil, nil
 	}
 	groups, ok := v.context.Comments[n]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	noSecDefaultTag, err := v.gosec.config.GetGlobal(Nosec)
@@ -831,31 +885,54 @@ func (v *astVisitor) ignore(n ast.Node) map[string]issue.SuppressionInfo {
 		v.stats.NumNosec++
 
 		justification := ""
-		commentParts := regexp.MustCompile(`-{2,}`).Split(args, 2)
-		directive := commentParts[0]
-		if len(commentParts) > 1 {
-			justification = strings.TrimSpace(strings.TrimRight(commentParts[1], "\n"))
+		if idx := strings.Index(args, "--"); idx > -1 {
+			justification = strings.TrimSpace(strings.TrimLeft(args[idx+2:], "-"))
+			args = args[:idx]
 		}
 
-		re := regexp.MustCompile(`(G\d{3})`)
-		matches := re.FindAllStringSubmatch(directive, -1)
+		directive := strings.TrimSpace(args)
+		// If the directive is empty or contains "block" (legacy), ignore all rules
+		if len(directive) == 0 || directive == "block" {
+			return map[string]issue.SuppressionInfo{
+				aliasOfAllRules: {
+					Kind:          "inSource",
+					Justification: justification,
+				},
+			}, group
+		}
 
+		ignores := make(map[string]issue.SuppressionInfo)
 		suppression := issue.SuppressionInfo{
 			Kind:          "inSource",
 			Justification: justification,
 		}
 
-		ignores := make(map[string]issue.SuppressionInfo)
-		for _, v := range matches {
-			ignores[v[1]] = suppression
+		// Manually parse identifiers starting with 'G' followed by 3 digits
+		for i := 0; i < len(directive); {
+			if directive[i] == 'G' && i+4 <= len(directive) {
+				ruleID := directive[i : i+4]
+				valid := true
+				for j := 1; j < 4; j++ {
+					if directive[i+j] < '0' || directive[i+j] > '9' {
+						valid = false
+						break
+					}
+				}
+				if valid {
+					ignores[ruleID] = suppression
+					i += 4
+					continue
+				}
+			}
+			i++
 		}
 
-		if len(matches) == 0 {
+		if len(ignores) == 0 {
 			ignores[aliasOfAllRules] = suppression
 		}
-		return ignores
+		return ignores, group
 	}
-	return nil
+	return nil, nil
 }
 
 // updateIssues updates the issues list with the given issue, handling suppressions.
