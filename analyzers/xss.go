@@ -36,12 +36,37 @@ func XSS() taint.Config {
 			{Package: "bufio", Name: "Scanner", Pointer: true},
 		},
 		Sinks: []taint.Sink{
+			// Direct write on the response writer itself — receiver already scopes it.
 			{Package: "net/http", Receiver: "ResponseWriter", Method: "Write"},
-			// For fmt print functions, Args[0] is writer - skip it, check format and data args
-			{Package: "fmt", Method: "Fprintf", CheckArgs: []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
-			{Package: "fmt", Method: "Fprint", CheckArgs: []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
-			{Package: "fmt", Method: "Fprintln", CheckArgs: []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
-			{Package: "io", Method: "WriteString", CheckArgs: []int{1}},
+			// fmt print family: arg[0] is the io.Writer target; args[1..n] are the
+			// format string and variadic data (all checked for taint).
+			// Guard: only treat as a sink when arg[0] implements net/http.ResponseWriter.
+			// Writing to os.Stdout, os.Stderr, bytes.Buffer, exec pipes, etc. is NOT flagged.
+			{
+				Package:       "fmt",
+				Method:        "Fprintf",
+				CheckArgs:     []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				ArgTypeGuards: map[int]string{0: "net/http.ResponseWriter"},
+			},
+			{
+				Package:       "fmt",
+				Method:        "Fprint",
+				CheckArgs:     []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				ArgTypeGuards: map[int]string{0: "net/http.ResponseWriter"},
+			},
+			{
+				Package:       "fmt",
+				Method:        "Fprintln",
+				CheckArgs:     []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				ArgTypeGuards: map[int]string{0: "net/http.ResponseWriter"},
+			},
+			// io.WriteString: same rationale — only a sink when the writer is HTTP.
+			{
+				Package:       "io",
+				Method:        "WriteString",
+				CheckArgs:     []int{1},
+				ArgTypeGuards: map[int]string{0: "net/http.ResponseWriter"},
+			},
 			// Template functions that unsafely inject untrusted content
 			{Package: "html/template", Method: "HTML"},
 			{Package: "html/template", Method: "HTMLAttr"},
@@ -58,6 +83,23 @@ func XSS() taint.Config {
 			// url.QueryEscape for URL parameter escaping
 			{Package: "net/url", Method: "QueryEscape"},
 			{Package: "net/url", Method: "PathEscape"},
+
+			// JSON encoding produces structurally safe output that cannot
+			// contain unescaped HTML tags or script injections. The output
+			// is served as application/json, not text/html.
+			{Package: "encoding/json", Method: "Marshal"},
+			{Package: "encoding/json", Method: "MarshalIndent"},
+
+			// Integer/float conversions produce numeric strings that cannot
+			// contain XSS payloads.
+			{Package: "strconv", Method: "Atoi"},
+			{Package: "strconv", Method: "Itoa"},
+			{Package: "strconv", Method: "ParseInt"},
+			{Package: "strconv", Method: "ParseUint"},
+			{Package: "strconv", Method: "ParseFloat"},
+			{Package: "strconv", Method: "FormatInt"},
+			{Package: "strconv", Method: "FormatUint"},
+			{Package: "strconv", Method: "FormatFloat"},
 		},
 	}
 }

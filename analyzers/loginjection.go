@@ -46,10 +46,19 @@ func LogInjection() taint.Config {
 			{Package: "log", Method: "Panic"},
 			{Package: "log", Method: "Panicf"},
 			{Package: "log", Method: "Panicln"},
-			{Package: "log/slog", Method: "Info"},
-			{Package: "log/slog", Method: "Warn"},
-			{Package: "log/slog", Method: "Error"},
-			{Package: "log/slog", Method: "Debug"},
+			// log/slog structured logging functions have the signature:
+			//   func Warn(msg string, args ...any)
+			// The variadic `args` are key-value attribute pairs whose values are
+			// automatically escaped by both TextHandler (JSON-quoted) and JSONHandler
+			// (JSON-encoded), making them safe against log injection.
+			// Only the `msg` argument (args[0]) is a real injection vector because
+			// TextHandler writes it verbatim without quoting.
+			// CheckArgs: []int{0} scopes the taint check to the message only,
+			// preventing false positives on: slog.Warn("msg", "key", taintedVal)
+			{Package: "log/slog", Method: "Info", CheckArgs: []int{0}},
+			{Package: "log/slog", Method: "Warn", CheckArgs: []int{0}},
+			{Package: "log/slog", Method: "Error", CheckArgs: []int{0}},
+			{Package: "log/slog", Method: "Debug", CheckArgs: []int{0}},
 		},
 		Sanitizers: []taint.Sanitizer{
 			// strings.ReplaceAll can strip newlines/CRLF for log injection
@@ -58,6 +67,21 @@ func LogInjection() taint.Config {
 			{Package: "strconv", Method: "Quote"},
 			// url.QueryEscape encodes special characters
 			{Package: "net/url", Method: "QueryEscape"},
+
+			// JSON encoding escapes all special characters including newlines,
+			// producing structurally safe output for log entries.
+			{Package: "encoding/json", Method: "Marshal"},
+			{Package: "encoding/json", Method: "MarshalIndent"},
+
+			// Numeric conversions produce strings that cannot contain
+			// log injection characters (newlines, carriage returns).
+			{Package: "strconv", Method: "Atoi"},
+			{Package: "strconv", Method: "Itoa"},
+			{Package: "strconv", Method: "ParseInt"},
+			{Package: "strconv", Method: "ParseUint"},
+			{Package: "strconv", Method: "ParseFloat"},
+			{Package: "strconv", Method: "FormatInt"},
+			{Package: "strconv", Method: "FormatFloat"},
 		},
 	}
 }

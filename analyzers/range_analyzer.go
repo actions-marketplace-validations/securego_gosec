@@ -216,7 +216,7 @@ func (ra *RangeAnalyzer) ResolveRange(v ssa.Value, block *ssa.BasicBlock) *range
 			var finalResIf *rangeResult
 			matchCount := 0
 			for i, succ := range currDom.Succs {
-				reach := ra.IsReachable(succ, block)
+				reach := ra.IsReachable(succ, block, currDom)
 				if reach {
 					matchCount++
 					if resIf := ra.getResultRangeForIfEdge(vIf, i == 0, v); resIf != nil {
@@ -258,11 +258,15 @@ func (ra *RangeAnalyzer) ResolveRange(v ssa.Value, block *ssa.BasicBlock) *range
 
 // IsReachable returns true if there is a path from the start block to the target block in the CFG.
 // It uses iterative stack-based traversal and the RangeAnalyzer's BlockMap to avoid allocations.
-func (ra *RangeAnalyzer) IsReachable(start, target *ssa.BasicBlock) bool {
+// An optional exclude block can be provided to prevent traversal through it (used to avoid loop back edges).
+func (ra *RangeAnalyzer) IsReachable(start, target *ssa.BasicBlock, exclude ...*ssa.BasicBlock) bool {
 	if start == target {
 		return true
 	}
 	clear(ra.BlockMap)
+	for _, ex := range exclude {
+		ra.BlockMap[ex] = true
+	}
 	ra.reachStack = ra.reachStack[:0]
 	ra.reachStack = append(ra.reachStack, start)
 
@@ -490,13 +494,21 @@ func (ra *RangeAnalyzer) isNonNegativeRecursive(v ssa.Value) bool {
 		return true
 	}
 
+	// Elements loaded from a []rune slice created by converting a
+	// string are valid Unicode code points, guaranteed non-negative.
+	if isElementOfStringRuneSlice(v) {
+		return true
+	}
+
 	v, info := getRealValueFromOperation(v)
 	if info.op == "neg" || info.op == "-" {
 		return false
 	}
 	switch v := v.(type) {
 	case *ssa.Extract:
-		if _, ok := v.Tuple.(*ssa.Next); ok {
+		// For range loops, only the index (extract 0) is guaranteed non-negative.
+		// Extract 1 is the element value which can be any integer.
+		if _, ok := v.Tuple.(*ssa.Next); ok && v.Index == 0 {
 			return true
 		}
 	case *ssa.Call:
@@ -557,6 +569,44 @@ func (ra *RangeAnalyzer) isNonNegativeRecursive(v ssa.Value) bool {
 		}
 	}
 	return false
+}
+
+// isElementOfStringRuneSlice checks whether v is a value loaded
+// from a []rune slice that was created by converting a string.
+// Go guarantees that string-to-[]rune conversions produce valid
+// Unicode code points (>= 0), so every element is non-negative.
+func isElementOfStringRuneSlice(v ssa.Value) bool {
+	unOp, ok := v.(*ssa.UnOp)
+	if !ok || unOp.Op != token.MUL {
+		return false
+	}
+	idx, ok := unOp.X.(*ssa.IndexAddr)
+	if !ok {
+		return false
+	}
+	return isStringToRuneConversion(idx.X)
+}
+
+// isStringToRuneConversion returns true when v is a Convert from
+// string to []int32 (i.e. []rune).
+func isStringToRuneConversion(v ssa.Value) bool {
+	conv, ok := v.(*ssa.Convert)
+	if !ok {
+		return false
+	}
+	srcBasic, ok := conv.X.Type().Underlying().(*types.Basic)
+	if !ok || srcBasic.Kind() != types.String {
+		return false
+	}
+	dstSlice, ok := conv.Type().Underlying().(*types.Slice)
+	if !ok {
+		return false
+	}
+	elemBasic, ok := dstSlice.Elem().Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	return elemBasic.Kind() == types.Int32
 }
 
 func (ra *RangeAnalyzer) ComputeRange(v ssa.Value, block *ssa.BasicBlock) *rangeResult {
@@ -808,6 +858,11 @@ func (ra *RangeAnalyzer) ComputeRange(v ssa.Value, block *ssa.BasicBlock) *range
 			if alloc, ok := v.X.(*ssa.Alloc); ok {
 				return ra.resolveAllocRange(alloc, block, v)
 			}
+			// Don't recurse through IndexAddr: *(&data[i]) yields the element value,
+			// whose range is unrelated to the index i's range.
+			if _, ok := v.X.(*ssa.IndexAddr); ok {
+				break
+			}
 			// Just recurse
 			subRes := ra.ResolveRange(v.X, block)
 			res.CopyFrom(subRes)
@@ -954,7 +1009,7 @@ func (ra *RangeAnalyzer) ComputeRange(v ssa.Value, block *ssa.BasicBlock) *range
 							res.minValue = minBounds(res.minValue, res.minValueSet, argRes.minValue, argRes.minValueSet, isSrcUnsigned)
 							res.minValueSet = res.minValueSet && argRes.minValueSet
 							res.maxValue = minBounds(res.maxValue, res.maxValueSet, argRes.maxValue, argRes.maxValueSet, isSrcUnsigned)
-							res.maxValueSet = res.maxValueSet && argRes.maxValueSet
+							res.maxValueSet = res.maxValueSet || argRes.maxValueSet
 						}
 						ra.releaseResult(argRes)
 					}
@@ -968,7 +1023,7 @@ func (ra *RangeAnalyzer) ComputeRange(v ssa.Value, block *ssa.BasicBlock) *range
 							res.CopyFrom(argRes)
 						} else {
 							res.minValue = maxBounds(res.minValue, res.minValueSet, argRes.minValue, argRes.minValueSet, isSrcUnsigned)
-							res.minValueSet = res.minValueSet && argRes.minValueSet
+							res.minValueSet = res.minValueSet || argRes.minValueSet
 							res.maxValue = maxBounds(res.maxValue, res.maxValueSet, argRes.maxValue, argRes.maxValueSet, isSrcUnsigned)
 							res.maxValueSet = res.maxValueSet && argRes.maxValueSet
 						}

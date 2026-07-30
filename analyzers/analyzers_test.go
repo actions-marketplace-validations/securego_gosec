@@ -51,8 +51,40 @@ var _ = Describe("gosec analyzers", func() {
 	})
 
 	Context("report correct errors for all samples", func() {
+		It("should detect HTTP request smuggling", func() {
+			runner("G113", testutils.SampleCodeG113)
+		})
+
 		It("should detect integer conversion overflow", func() {
 			runner("G115", testutils.SampleCodeG115)
+		})
+
+		It("should detect context propagation failures", func() {
+			runner("G118", testutils.SampleCodeG118)
+		})
+
+		It("should detect unsafe redirect header propagation", func() {
+			runner("G119", testutils.SampleCodeG119)
+		})
+
+		It("should detect unbounded form parsing", func() {
+			runner("G120", testutils.SampleCodeG120)
+		})
+
+		It("should detect unsafe CORS bypass patterns", func() {
+			runner("G121", testutils.SampleCodeG121)
+		})
+
+		It("should detect Walk/WalkDir symlink TOCTOU callback path usage", func() {
+			runner("G122", testutils.SampleCodeG122)
+		})
+
+		It("should detect TLS resumption VerifyPeerCertificate bypass patterns", func() {
+			runner("G123", testutils.SampleCodeG123)
+		})
+
+		It("should detect insecure HTTP cookie configuration", func() {
+			runner("G124", testutils.SampleCodeG124)
 		})
 
 		It("should detect hardcoded nonce/IV", func() {
@@ -89,6 +121,22 @@ var _ = Describe("gosec analyzers", func() {
 
 		It("should detect log injection via taint analysis", func() {
 			runner("G706", testutils.SampleCodeG706)
+		})
+
+		It("should detect SMTP command/header injection via taint analysis", func() {
+			runner("G707", testutils.SampleCodeG707)
+		})
+
+		It("should detect server-side template injection via taint analysis", func() {
+			runner("G708", testutils.SampleCodeG708)
+		})
+
+		It("should detect unsafe deserialization via taint analysis", func() {
+			runner("G709", testutils.SampleCodeG709)
+		})
+
+		It("should detect open redirect via taint analysis", func() {
+			runner("G710", testutils.SampleCodeG710)
 		})
 	})
 })

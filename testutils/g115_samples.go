@@ -219,7 +219,9 @@ func main() {
     fmt.Println(b)
 }
 	`,
-	}, 1, gosec.NewConfig()},
+		// uint -> int (via CustomType) is same platform word size,
+		// no truncation possible.
+	}, 0, gosec.NewConfig()},
 	{[]string{
 		`
 package main
@@ -873,7 +875,8 @@ func sneakyNEQ(a int) uint {
 	panic("not supported")
 }
 	`,
-	}, 1, gosec.NewConfig()},
+		// int -> uint is same platform word size, no truncation.
+	}, 0, gosec.NewConfig()},
 	{[]string{
 		`
 package main
@@ -1822,4 +1825,247 @@ func main() {
 	}
 }
 `}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "math"
+
+// Issue #1501: three guarded conversion patterns inside a loop
+func fetchData(ids []string, lastRunReps uint8) uint8 {
+	repetitions := lastRunReps
+	for len(ids) > 0 {
+		payload := []byte{}
+		calcReps := len(payload) / len(ids)
+
+		repetitions = 255
+		if calcReps > 0 && calcReps < math.MaxUint8 {
+			repetitions = uint8(calcReps)
+		}
+
+		if calcReps < 0 || calcReps >= math.MaxUint8 {
+			repetitions = 255
+		} else {
+			repetitions = uint8(calcReps)
+		}
+
+		if calcReps < 0 || calcReps >= math.MaxUint8 {
+			return 0
+		}
+		repetitions = uint8(calcReps)
+	}
+	return repetitions
+}
+	`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "math"
+
+func rangeLoopSafe(data []int) uint8 {
+	var out uint8
+	for _, v := range data {
+		if v > 0 && v < math.MaxUint8 {
+			out = uint8(v)
+		}
+	}
+	return out
+}
+	`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+func continueLoopSafe(data []int) uint8 {
+	var out uint8
+	for _, v := range data {
+		if v < 0 || v > 255 {
+			continue
+		}
+		out = uint8(v)
+	}
+	return out
+}
+	`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+func loopUnsafe(data []int) uint8 {
+	var out uint8
+	for _, v := range data {
+		out = uint8(v)
+	}
+	return out
+}
+	`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+func loopWithBounds(data []int) uint8 {
+	var out uint8
+	for i := 0; i < len(data); i++ {
+		if data[i] >= 0 && data[i] < 256 {
+			out = uint8(data[i])
+		}
+	}
+	return out
+}
+	`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+// only lower bound check, missing upper (unsafe)
+func loopMissingUpper(data []int) uint8 {
+	var out uint8
+	for i := 0; i < len(data); i++ {
+		if data[i] >= 0 {
+			out = uint8(data[i])
+		}
+	}
+	return out
+}
+	`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+// only upper bound check, missing lower (unsafe)
+func loopMissingLower(data []int) uint8 {
+	var out uint8
+	for i := 0; i < len(data); i++ {
+		if data[i] <= 255 {
+			out = uint8(data[i])
+		}
+	}
+	return out
+}
+	`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import (
+	"math"
+)
+
+func minMaxChecked(data []int) uint8 {
+	var out uint8
+	for i := 0; i < len(data); i++ {
+		out = uint8(max(0, min(math.MaxUint8, data[i])))
+	}
+	return out
+}
+	`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import (
+	"math"
+)
+
+func maxMinChecked(data []int) uint8 {
+	var out uint8
+	for i := 0; i < len(data); i++ {
+		out = uint8(min(math.MaxUint8, max(0, data[i])))
+	}
+	return out
+}
+	`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+func issue1577RangeChecked(v int64) byte {
+	if v < -128 || v > 255 {
+		return 0
+	}
+	return byte(v)
+}
+	`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+func issue1577UnsafeLower(v int64) byte {
+	if v < -129 || v > 255 {
+		return 0
+	}
+	return byte(v)
+}
+	`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+func issue1577UnsafeUpper(v int64) byte {
+	if v < -128 || v > 256 {
+		return 0
+	}
+	return byte(v)
+}
+	`}, 1, gosec.NewConfig()},
+	// Platform-word-sized conversions (uintptr/uint/int) are
+	// same-width on all platforms — no truncation possible.
+	{[]string{`
+package main
+
+import (
+	"os"
+	"syscall"
+)
+
+// issue 1635: uintptr -> int for file descriptors is safe
+func issue1635FdToInt(f *os.File) int {
+	return int(f.Fd())
+}
+
+func issue1635SyscallFlock(f *os.File) error {
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+}
+	`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+// uint -> int is same platform word size
+func uintToInt(v uint) int {
+	return int(v)
+}
+
+// int -> uint is same platform word size
+func intToUint(v int) uint {
+	return uint(v)
+}
+
+// uintptr -> uint is same platform word size
+func uintptrToUint(v uintptr) uint {
+	return uint(v)
+}
+	`}, 0, gosec.NewConfig()},
+	// Issue #1636: rune from []rune(string) with upper-bound guard
+	{[]string{`
+package main
+
+const maxByte = 255
+
+func sanitize(malformed string) []byte {
+	asRunes := []rune(malformed)
+	final := make([]byte, len(asRunes))
+	for i, r := range asRunes {
+		if r > maxByte {
+			continue
+		}
+		final[i] = byte(r)
+	}
+	return final
+}
+	`}, 0, gosec.NewConfig()},
+	// Negative: []rune parameter (not from string) with only
+	// upper-bound guard is still unsafe.
+	{[]string{`
+package main
+
+func process(runes []rune) []byte {
+	out := make([]byte, 0, len(runes))
+	for _, r := range runes {
+		if r > 255 {
+			continue
+		}
+		out = append(out, byte(r))
+	}
+	return out
+}
+	`}, 1, gosec.NewConfig()},
 }

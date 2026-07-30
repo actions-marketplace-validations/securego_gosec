@@ -99,4 +99,90 @@ func safeHandler(r *http.Request) {
 	os.Open(cleaned)
 }
 `}, 0, gosec.NewConfig()},
+	// Test: path.Base sanitizer
+	{[]string{`
+package main
+
+import (
+	"net/http"
+	"os"
+	"path"
+)
+
+func handler(r *http.Request) {
+	userFile := r.FormValue("file")
+	safe := path.Base(userFile)
+	os.Open(safe)
+}
+`}, 0, gosec.NewConfig()},
+	// Safe: filepath.Abs sanitizer (calls Clean internally)
+	{[]string{`
+package main
+
+import (
+	"os"
+	"path/filepath"
+)
+
+func main() {
+	filename := os.Getenv("FILE")
+	filename, _ = filepath.Abs(filename)
+	os.ReadFile(filename)
+}
+`}, 0, gosec.NewConfig()},
+	// Test: strconv sanitizer
+	{[]string{`
+package main
+
+import (
+	"net/http"
+	"os"
+	"strconv"
+)
+
+func handler(r *http.Request) {
+	id := r.FormValue("id")
+	num, _ := strconv.Atoi(id)
+	os.Open("/tmp/file" + strconv.Itoa(num))
+}
+`}, 0, gosec.NewConfig()},
+	// True positive: http.ServeFile with user-controlled path
+	{[]string{`
+package main
+
+import (
+	"net/http"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("file")
+	http.ServeFile(w, r, path)
+}
+`}, 1, gosec.NewConfig()},
+	// True positive: http.ServeFileFS with user-controlled path
+	{[]string{`
+package main
+
+import (
+	"net/http"
+	"os"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	name := r.FormValue("name")
+	http.ServeFileFS(w, r, os.DirFS("."), name)
+}
+`}, 1, gosec.NewConfig()},
+	// True negative: http.ServeFile with hardcoded path
+	{[]string{`
+package main
+
+import (
+	"net/http"
+)
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "static/index.html")
+}
+`}, 0, gosec.NewConfig()},
 }

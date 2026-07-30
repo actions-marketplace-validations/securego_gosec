@@ -33,6 +33,9 @@ install-govulncheck:
 test: build-race fmt vet sec govulncheck
 	go run github.com/onsi/ginkgo/v2/ginkgo -- --ginkgo.v --ginkgo.fail-fast
 
+test-nocache: build-race fmt vet sec govulncheck
+	go test -count=1 -v ./...
+
 fmt:
 	@echo "FORMATTING"
 	@FORMATTED=`$(GO) fmt ./...`
@@ -57,7 +60,7 @@ govulncheck: install-govulncheck
 	fi
 
 test-coverage:
-	go test -race -v -count=1 -coverprofile=coverage.out ./...
+	go test -race -v -count=1 -coverpkg=./... -coverprofile=coverage.out ./...
 
 build:
 	go build $(LDFLAGS) -o $(BIN) ./cmd/gosec/
@@ -99,4 +102,4 @@ tlsconfig:
 perf-diff:
 	./perf-diff.sh
 
-.PHONY: test build clean release image image-push tlsconfig perf-diff
+.PHONY: test test-nocache build clean release image image-push tlsconfig perf-diff

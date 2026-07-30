@@ -62,6 +62,42 @@ func TestTaintAnalyzerConstructors(t *testing.T) {
 			id:          "G706",
 			description: "Log injection via taint analysis",
 		},
+		{
+			name:        "SMTPInjection",
+			constructor: newSMTPInjectionAnalyzer,
+			id:          "G707",
+			description: "SMTP command/header injection via taint analysis",
+		},
+		{
+			name:        "SSTI",
+			constructor: newSSTIAnalyzer,
+			id:          "G708",
+			description: "Server-side template injection via taint analysis",
+		},
+		{
+			name:        "UnsafeDeserialization",
+			constructor: newUnsafeDeserializationAnalyzer,
+			id:          "G709",
+			description: "Unsafe deserialization of untrusted data via taint analysis",
+		},
+		{
+			name:        "OpenRedirect",
+			constructor: newOpenRedirectAnalyzer,
+			id:          "G710",
+			description: "Open redirect via taint analysis",
+		},
+		{
+			name:        "FormParsingLimit",
+			constructor: newFormParsingLimitAnalyzer,
+			id:          "G120",
+			description: "Unbounded multipart form parsing can cause memory exhaustion",
+		},
+		{
+			name:        "InsecureCookie",
+			constructor: newInsecureCookieAnalyzer,
+			id:          "G124",
+			description: "Insecure HTTP cookie configuration",
+		},
 	}
 
 	for _, tt := range tests {
@@ -89,7 +125,7 @@ func TestTaintAnalyzerConstructors(t *testing.T) {
 
 // TestDefaultAnalyzersIncludeTaint tests that default analyzers include taint rules.
 func TestDefaultAnalyzersIncludeTaint(t *testing.T) {
-	expectedTaintIDs := []string{"G701", "G702", "G703", "G704", "G705", "G706"}
+	expectedTaintIDs := []string{"G701", "G702", "G703", "G704", "G705", "G706", "G707", "G708", "G709", "G710"}
 
 	found := make(map[string]bool)
 	for _, def := range defaultAnalyzers {
@@ -107,7 +143,7 @@ func TestDefaultAnalyzersIncludeTaint(t *testing.T) {
 func TestGenerateIncludesTaintAnalyzers(t *testing.T) {
 	analyzerList := Generate(false)
 
-	expectedTaintIDs := []string{"G701", "G702", "G703", "G704", "G705", "G706"}
+	expectedTaintIDs := []string{"G701", "G702", "G703", "G704", "G705", "G706", "G707", "G708", "G709", "G710"}
 
 	for _, id := range expectedTaintIDs {
 		if _, ok := analyzerList.Analyzers[id]; !ok {
@@ -272,7 +308,7 @@ func TestAnalyzerList_AnalyzersInfo(t *testing.T) {
 func TestDefaultTaintAnalyzers(t *testing.T) {
 	analyzers := DefaultTaintAnalyzers()
 
-	expectedCount := 6 // SQL, Command, Path, SSRF, XSS, Log
+	expectedCount := 11 // SQL, Command, Path, SSRF, XSS, Log, SMTP, SSTI, Deserialization, FormParsing, OpenRedirect
 	if len(analyzers) != expectedCount {
 		t.Errorf("Expected %d taint analyzers, got %d", expectedCount, len(analyzers))
 	}
@@ -284,6 +320,11 @@ func TestDefaultTaintAnalyzers(t *testing.T) {
 		"G704": false,
 		"G705": false,
 		"G706": false,
+		"G707": false,
+		"G708": false,
+		"G709": false,
+		"G710": false,
+		"G120": false,
 	}
 
 	for _, analyzer := range analyzers {
@@ -388,6 +429,15 @@ func TestTaintRuleConstants(t *testing.T) {
 		}
 		if LogInjectionRule.CWE != "CWE-117" {
 			t.Errorf("CWE = %s, want CWE-117", LogInjectionRule.CWE)
+		}
+	})
+
+	t.Run("SMTPInjection", func(t *testing.T) {
+		if SMTPInjectionRule.ID != "G707" {
+			t.Errorf("ID = %s, want G707", SMTPInjectionRule.ID)
+		}
+		if SMTPInjectionRule.CWE != "CWE-93" {
+			t.Errorf("CWE = %s, want CWE-93", SMTPInjectionRule.CWE)
 		}
 	})
 }

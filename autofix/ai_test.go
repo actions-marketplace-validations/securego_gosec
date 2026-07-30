@@ -53,7 +53,7 @@ func TestGenerateSolutionByGemini_NoCandidates(t *testing.T) {
 	err := generateSolution(mockClient, issues)
 
 	// Assert
-	require.EqualError(t, err, "no autofix returned by gemini")
+	require.EqualError(t, err, "no autofix returned by AI provider")
 	mock.AssertExpectationsForObjects(t, mockClient)
 }
 
@@ -70,7 +70,7 @@ func TestGenerateSolutionByGemini_APIError(t *testing.T) {
 	err := generateSolution(mockClient, issues)
 
 	// Assert
-	require.EqualError(t, err, "generating autofix with gemini: API error")
+	require.EqualError(t, err, "generating autofix with AI provider: API error")
 	mock.AssertExpectationsForObjects(t, mockClient)
 }
 
@@ -160,7 +160,7 @@ func TestGenerateSolution_ClaudeProvider(t *testing.T) {
 	issues := []*issue.Issue{{What: "Test issue"}}
 
 	// Act
-	err := GenerateSolution("claude-sonnet-4-0", "", "", false, issues)
+	err := GenerateSolution("claude-sonnet-4-6", "", "", false, issues)
 
 	// Assert
 	// Without a real API key, we expect an error from the API
@@ -172,7 +172,7 @@ func TestGenerateSolution_GeminiProvider(t *testing.T) {
 	issues := []*issue.Issue{{What: "Test issue"}}
 
 	// Act
-	err := GenerateSolution("gemini-2.0-flash", "", "", false, issues)
+	err := GenerateSolution("gemini-2.5-flash", "", "", false, issues)
 
 	// Assert
 	// Without a real API key, we expect an error from the API
@@ -184,7 +184,7 @@ func TestGenerateSolution_OpenAIProvider(t *testing.T) {
 	issues := []*issue.Issue{{What: "Test issue"}}
 
 	// Act
-	err := GenerateSolution("gpt-4o", "", "", false, issues)
+	err := GenerateSolution("gpt-5.4", "", "", false, issues)
 
 	// Assert
 	// Without a real API key, we expect an error from the API

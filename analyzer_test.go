@@ -28,6 +28,7 @@ import (
 
 	"github.com/securego/gosec/v2"
 	"github.com/securego/gosec/v2/analyzers"
+	"github.com/securego/gosec/v2/issue"
 	"github.com/securego/gosec/v2/rules"
 	"github.com/securego/gosec/v2/testutils"
 )
@@ -84,12 +85,17 @@ var _ = Describe("Analyzer", func() {
 				func bar(){
 					println("package has two files!")
 				}`)
+			pkg.AddFile("foo:bar.go", `
+				package main
+				func fooBar(){
+					println("package has another file!")
+				}`)
 			err := pkg.Build()
 			Expect(err).ShouldNot(HaveOccurred())
 			err = analyzer.Process(buildTags, pkg.Path)
 			Expect(err).ShouldNot(HaveOccurred())
 			_, metrics, _ := analyzer.Report()
-			Expect(metrics.NumFiles).To(Equal(2))
+			Expect(metrics.NumFiles).To(Equal(3))
 		})
 
 		It("should be able to analyze multiple Go files concurrently", func() {
@@ -113,6 +119,51 @@ var _ = Describe("Analyzer", func() {
 			Expect(err).ShouldNot(HaveOccurred())
 			_, metrics, _ := customAnalyzer.Report()
 			Expect(metrics.NumFiles).To(Equal(2))
+		})
+
+		It("should not race when analyzing G304 patterns across many packages concurrently (issue #1586)", func() {
+			const numPackages = 20
+			const concurrency = 16
+
+			// Source that exercises both cleanedVar and joinedVar maps in the
+			// readfile rule: one assignment via filepath.Clean (tracked in
+			// cleanedVar), one via filepath.Join with a variable argument
+			// (tracked in joinedVar), plus an os.Open call that triggers Match.
+			g304Source := `package main
+
+import (
+	"os"
+	"path/filepath"
+)
+
+func main() {
+	name := "input"
+	cleaned := filepath.Clean(name)
+	_, _ = os.Open(cleaned)
+	joined := filepath.Join("/base", name)
+	_, _ = os.Open(joined)
+}
+`
+			concurrentAnalyzer := gosec.NewAnalyzer(nil, false, false, false, concurrency, logger)
+			concurrentAnalyzer.LoadRules(rules.Generate(false, rules.NewRuleFilter(false, "G304")).RulesInfo())
+
+			pkgs := make([]*testutils.TestPackage, numPackages)
+			paths := make([]string, numPackages)
+			for i := range numPackages {
+				pkgs[i] = testutils.NewTestPackage()
+				pkgs[i].AddFile("main.go", g304Source)
+				err := pkgs[i].Build()
+				Expect(err).ShouldNot(HaveOccurred())
+				paths[i] = pkgs[i].Path
+			}
+			defer func() {
+				for _, p := range pkgs {
+					p.Close()
+				}
+			}()
+
+			err := concurrentAnalyzer.Process(buildTags, paths...)
+			Expect(err).ShouldNot(HaveOccurred())
 		})
 
 		It("should be able to analyze multiple Go packages", func() {
@@ -1757,6 +1808,30 @@ var _ = Describe("Analyzer", func() {
 			Expect(err).Should(HaveOccurred())
 		})
 
+		It("should properly parse the errors with colons in path", func() {
+			pkg := &packages.Package{
+				Errors: []packages.Error{
+					{
+						Pos: "C:\\file:1:2",
+						Msg: "build error",
+					},
+					{
+						Pos: "file:100:1:2",
+						Msg: "build error",
+					},
+				},
+			}
+			errors, err := gosec.ParseErrors(pkg)
+			Expect(err).ShouldNot(HaveOccurred())
+			Expect(errors).To(HaveLen(2))
+			for _, ferr := range errors {
+				Expect(ferr).To(HaveLen(1))
+				Expect(ferr[0].Line).To(Equal(1))
+				Expect(ferr[0].Column).To(Equal(2))
+				Expect(ferr[0].Err).Should(MatchRegexp(`build error`))
+			}
+		})
+
 		It("should append  error to the same file", func() {
 			pkg := &packages.Package{
 				Errors: []packages.Error{
@@ -2535,6 +2610,103 @@ func main() {
 
 			// Should not panic with no analyzers
 			analyzer.CheckAnalyzers(pkgs[0])
+		})
+	})
+
+	Context("when requiring rule IDs and justifications in nosec directives", func() {
+		// runAnalyzer builds a package whose md5 line carries the given
+		// directive comment and runs gosec with the supplied global options.
+		runAnalyzer := func(directive string, opts map[gosec.GlobalOption]string) ([]*issue.Issue, map[string][]gosec.Error) {
+			sample := testutils.SampleCodeG401[0]
+			source := sample.Code[0]
+
+			cfg := gosec.NewConfig()
+			for k, v := range opts {
+				cfg.SetGlobal(k, v)
+			}
+			customAnalyzer := gosec.NewAnalyzer(cfg, tests, false, false, 1, logger)
+			customAnalyzer.LoadRules(rules.Generate(false, rules.NewRuleFilter(false, "G401")).RulesInfo())
+
+			pkg := testutils.NewTestPackage()
+			defer pkg.Close()
+			src := strings.Replace(source, "h := md5.New()", "h := md5.New() "+directive, 1)
+			pkg.AddFile("md5.go", src)
+			Expect(pkg.Build()).Should(Succeed())
+			Expect(customAnalyzer.Process(buildTags, pkg.Path)).Should(Succeed())
+			issues, _, errs := customAnalyzer.Report()
+			return issues, errs
+		}
+
+		// errCount totals errors across all files.
+		errCount := func(errs map[string][]gosec.Error) int {
+			n := 0
+			for _, e := range errs {
+				n += len(e)
+			}
+			return n
+		}
+
+		It("suppresses naked nosec when require-rules is disabled (default)", func() {
+			issues, errs := runAnalyzer("//#nosec", nil)
+			Expect(issues).Should(BeEmpty())
+			Expect(errCount(errs)).To(Equal(0))
+		})
+
+		It("does not suppress naked nosec when require-rules is enabled, and reports an error", func() {
+			issues, errs := runAnalyzer("//#nosec", map[gosec.GlobalOption]string{
+				gosec.NoSecRequireRules: "true",
+			})
+			Expect(issues).ShouldNot(BeEmpty())
+			Expect(errCount(errs)).To(Equal(1))
+		})
+
+		It("does not suppress legacy `block` directive when require-rules is enabled", func() {
+			issues, errs := runAnalyzer("//#nosec block", map[gosec.GlobalOption]string{
+				gosec.NoSecRequireRules: "true",
+			})
+			Expect(issues).ShouldNot(BeEmpty())
+			Expect(errCount(errs)).To(Equal(1))
+		})
+
+		It("suppresses directive with rule ID when require-rules is enabled", func() {
+			issues, errs := runAnalyzer("//#nosec G401", map[gosec.GlobalOption]string{
+				gosec.NoSecRequireRules: "true",
+			})
+			Expect(issues).Should(BeEmpty())
+			Expect(errCount(errs)).To(Equal(0))
+		})
+
+		It("does not suppress directive without justification when require-justification is enabled", func() {
+			issues, errs := runAnalyzer("//#nosec G401", map[gosec.GlobalOption]string{
+				gosec.NoSecRequireJustification: "true",
+			})
+			Expect(issues).ShouldNot(BeEmpty())
+			Expect(errCount(errs)).To(Equal(1))
+		})
+
+		It("does not suppress directive with empty justification when require-justification is enabled", func() {
+			issues, errs := runAnalyzer("//#nosec G401 --", map[gosec.GlobalOption]string{
+				gosec.NoSecRequireJustification: "true",
+			})
+			Expect(issues).ShouldNot(BeEmpty())
+			Expect(errCount(errs)).To(Equal(1))
+		})
+
+		It("suppresses directive with rule ID and justification when both options are enabled", func() {
+			issues, errs := runAnalyzer("//#nosec G401 -- false positive in test", map[gosec.GlobalOption]string{
+				gosec.NoSecRequireRules:         "true",
+				gosec.NoSecRequireJustification: "true",
+			})
+			Expect(issues).Should(BeEmpty())
+			Expect(errCount(errs)).To(Equal(0))
+		})
+
+		It("enforces the same rules for the //gosec:disable form", func() {
+			issues, errs := runAnalyzer("//gosec:disable", map[gosec.GlobalOption]string{
+				gosec.NoSecRequireRules: "true",
+			})
+			Expect(issues).ShouldNot(BeEmpty())
+			Expect(errCount(errs)).To(Equal(1))
 		})
 	})
 })
