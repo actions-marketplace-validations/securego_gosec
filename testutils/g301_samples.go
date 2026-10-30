@@ -52,4 +52,65 @@ func main() {
 	}
 }
 `}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+const weakDirPerm = 0777
+
+func main() {
+	_ = os.Mkdir("/tmp/mydir", weakDirPerm)
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+func main() {
+	_ = os.MkdirAll("/tmp/mydir", 0700|0077)
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+const safeDirPerm = 0750
+
+func main() {
+	_ = os.Mkdir("/tmp/mydir", safeDirPerm)
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+func main() {
+	root, err := os.OpenRoot("/tmp")
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	_ = root.Mkdir("mydir", 0777)
+	_ = root.MkdirAll("mydir/a/b", os.ModePerm)
+}
+`}, 2, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+func main() {
+	root, err := os.OpenRoot("/tmp")
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	_ = root.Mkdir("mydir", 0750)
+	_ = root.MkdirAll("mydir/a/b", 0700)
+}
+`}, 0, gosec.NewConfig()},
 }

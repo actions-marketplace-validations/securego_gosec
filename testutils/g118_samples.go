@@ -1937,4 +1937,104 @@ func arrayStore(ctx context.Context) [1]context.CancelFunc {
 	return arr
 }
 `}, 0, gosec.NewConfig()},
+
+	// Safe: cancel sent on a channel to the goroutine that will call it
+	{[]string{`
+package main
+
+import "context"
+
+func handOff(ctx context.Context, cancels chan<- context.CancelFunc) context.Context {
+	ctx, cancel := context.WithCancel(ctx)
+	cancels <- cancel
+	return ctx
+}
+`}, 0, gosec.NewConfig()},
+
+	// Vulnerable: only the context is sent on the channel, cancel is dropped
+	{[]string{`
+package main
+
+import "context"
+
+func handOff(ctx context.Context, ctxs chan<- context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	_ = cancel
+	ctxs <- ctx
+}
+`}, 1, gosec.NewConfig()},
+
+	// Safe: goroutine waits for ctx.Done() before using context.Background for shutdown
+	{[]string{`
+package main
+
+import (
+	"context"
+	"net/http"
+)
+
+func serve(ctx context.Context, srv *http.Server) {
+	go func() {
+		<-ctx.Done()
+		_ = srv.Shutdown(context.Background())
+	}()
+}
+`}, 0, gosec.NewConfig()},
+
+	// Safe: context.TODO used in a later block, after waiting for ctx.Done()
+	{[]string{`
+package main
+
+import (
+	"context"
+	"net/http"
+)
+
+func serve(ctx context.Context, srv *http.Server, force bool) {
+	go func() {
+		<-ctx.Done()
+		if force {
+			_ = srv.Close()
+			return
+		}
+		_ = srv.Shutdown(context.TODO())
+	}()
+}
+`}, 0, gosec.NewConfig()},
+
+	// Vulnerable: context.Background used before waiting for ctx.Done()
+	{[]string{`
+package main
+
+import (
+	"context"
+	"net/http"
+)
+
+func serve(ctx context.Context, srv *http.Server) {
+	go func() {
+		_ = srv.Shutdown(context.Background())
+		<-ctx.Done()
+	}()
+}
+`}, 1, gosec.NewConfig()},
+
+	// Vulnerable: ctx.Done() is only awaited on one branch
+	{[]string{`
+package main
+
+import (
+	"context"
+	"net/http"
+)
+
+func serve(ctx context.Context, srv *http.Server, wait bool) {
+	go func() {
+		if wait {
+			<-ctx.Done()
+		}
+		_ = srv.Shutdown(context.Background())
+	}()
+}
+`}, 1, gosec.NewConfig()},
 }

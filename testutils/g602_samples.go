@@ -740,4 +740,937 @@ func main() {
 	}
 }
 `}, 1, gosec.NewConfig()},
+	// Issue #1727: G602 not reported for a constant index equal to the length
+	// asserted by an equality guard (index == len is always out of range)
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[4])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)-1 == 1 {
+		fmt.Println(s[1])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		fmt.Println(s[1])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)-1 == 1 {
+	} else {
+		fmt.Println(s[0])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 0 {
+		fmt.Println(s[0])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Reversed operand order: the constant sits on the left of the guard, which
+	// extractBinOpBound handles in its binop.X arm. The asserted length has to
+	// be honoured in the "then" branch and distrusted in the "else" branch just
+	// as it is when the constant is on the right.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 == len(s) {
+		fmt.Println(s[3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 == len(s) {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 == len(s) {
+	} else {
+		fmt.Println(s[1])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// A positive constant offset on the compared expression: "len(s) + 1 == 4"
+	// asserts a length of 3, so index 3 is out of range and index 2 is not.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)+1 == 4 {
+		fmt.Println(s[3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)+1 == 4 {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// An "else if" chain: the inner guard owns its own "then" successor, so the
+	// length it asserts still clears an index inside that length.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else if len(s) == 5 {
+		fmt.Println(s[4])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else if len(s) == 5 {
+		fmt.Println(s[5])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// A nested equality guard inside the outer "else" branch: the nested guard
+	// is authoritative for the block it opens, so an index inside the length it
+	// asserts is cleared even though the outer branch asserts nothing.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		if len(s) == 1 {
+			fmt.Println(s[0])
+		}
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		if len(s) == 1 {
+			fmt.Println(s[1])
+		}
+	}
+}
+`}, 1, gosec.NewConfig()},
+
+	// Equality guards must validate the actual subslice bounds, only in the then branch.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[1:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 == len(s) {
+		fmt.Println(s[:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)-1 == 2 {
+		fmt.Println(s[:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s)+1 == 4 {
+		fmt.Println(s[:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:3:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:4])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:3:4])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		fmt.Println(s[:3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+	} else {
+		fmt.Println(s[:3:3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[1:])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[3:3])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func check(n int) {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[1:n])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func check(n int) {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[n:3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "fmt"
+
+func check(n int) {
+	s := make([]int, 0)
+	if len(s) == 3 {
+		fmt.Println(s[:3:n])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Issue #1755: a len() inequality on one slice must not suppress a
+	// violation on a different slice.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{1}
+	s2 := []int{10}
+	if len(s) >= 3 {
+		fmt.Println(s2[6])
+	}
+	fmt.Println(s2[6])
+}
+`}, 2, gosec.NewConfig()},
+	// Same-slice lower bounds still suppress accesses they actually prove safe.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) >= 3 {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// The boundary itself is not proved safe.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) >= 3 {
+		fmt.Println(s[3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Reversed comparison has the same meaning.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if 3 <= len(s) {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// The false branch of len(s) < 3 establishes len(s) >= 3.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) < 3 {
+		return
+	}
+	fmt.Println(s[2])
+}
+`}, 0, gosec.NewConfig()},
+	// != 0 guarantees at least one element.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) != 0 {
+		fmt.Println(s[0])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// != N for N > 0 does not guarantee a positive length.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0)
+	if len(s) != 3 {
+		fmt.Println(s[0])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// A nested branch must not lose the outer same-slice guarantee. The outer
+	// len(s) > 0 proves s[0] safe, while the inner else does not prove s[2].
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]byte, 0)
+	if len(s) > 0 {
+		if len(s) > 4 {
+			fmt.Println(s[3])
+		} else {
+			fmt.Println(s[2])
+		}
+		fmt.Println(s[0])
+	}
+}
+`}, 1, gosec.NewConfig()},
+
+	// Issue #1727 (continued): a nil-declared slice under an equality guard
+	// should be trusted exactly the way a make()/literal-backed slice already
+	// is (see the earlier #1727 cases above) -- index 2 is safe once len(s)
+	// is asserted to be 3.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	if len(s) == 3 {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// Same nil slice, but the guarded index is not covered by the asserted
+	// length -- must still be flagged.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	if len(s) == 3 {
+		fmt.Println(s[3])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Safety case: two distinct nil-declared slices of the same type in one
+	// function. Only "a" is guarded; "b" must still be flagged even though
+	// Go's SSA builder represents both as the same canonical nil constant --
+	// the fix must not let a's guard silence b's unguarded access.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var a []int
+	var b []int
+	if len(a) == 3 {
+		fmt.Println(a[2])
+	}
+	fmt.Println(b[2])
+}
+`}, 1, gosec.NewConfig()},
+	// Same shape, but the unguarded access sits textually before the guard --
+	// still must be flagged (the guard's block cannot dominate it either way).
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var a []int
+	var b []int
+	fmt.Println(b[2])
+	if len(a) == 3 {
+		fmt.Println(a[2])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Two distinct nil-declared slices of the same type, EACH independently
+	// guarded and safe: both accesses must be cleared. Go's SSA builder gives
+	// "a" and "b" distinct constant objects even though their type is
+	// identical, so a's guard and b's guard must not be conflated into a
+	// false "ambiguous, flag everything" fallback for one another.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var a []int
+	var b []int
+	if len(a) == 3 {
+		fmt.Println(a[2])
+	}
+	if len(b) == 5 {
+		fmt.Println(b[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// Issue #1753: G602 performs no bounds checking at all on the direct
+	// result of append() -- the IndexAddr base-type dispatch never reaches
+	// any bounds-checking path for a *ssa.Call. A statically-determinable
+	// append() growth (literal args) must now be tracked like make()/composite
+	// literals are, so an out-of-bounds constant index is flagged.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{}
+	s = append(s, 10)
+	fmt.Println(s[6])
+}
+`}, 1, gosec.NewConfig()},
+	// Same append()-grown slice, but the access is properly guarded by a
+	// satisfied len() equality check matching the asserted length -- must
+	// not be flagged.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{}
+	s = append(s, 10)
+	if len(s) == 1 {
+		fmt.Println(s[0])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// Cross-variable guard mismatch from #1753's own reproduction: a guard on
+	// one slice's len() must not "protect" a completely different slice's
+	// out-of-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{}
+	s = append(s, 10)
+
+	s2 := []int{10}
+	if len(s) == 3 {
+		fmt.Println(s2[6])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// A spread of a slice whose length is not statically determinable (e.g.
+	// spreading a function parameter) must not be treated as adding any
+	// guaranteed growth -- no new false positive from guessing an unknown
+	// length.
+	{[]string{`
+package main
+
+import "fmt"
+
+func f(other []int) {
+	s := []int{}
+	s = append(s, other...)
+	fmt.Println(s[6])
+}
+
+func main() {
+	f([]int{1, 2, 3})
+}
+`}, 0, gosec.NewConfig()},
+	// #1753's own equality-guard case: the constant index (6) falls outside
+	// the length asserted by the guard (3), so it's flagged under the same
+	// trust model #1746/#1749 already established for make()/composite-literal
+	// slices -- an append()-derived slice must reach the same conclusion.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{}
+	s = append(s, 10)
+	if len(s) == 3 {
+		fmt.Println(s[6])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// #1753's own inequality-guard case: a "len(s) >= N" guard is only a lower
+	// bound, so it proves indexes below N safe but not s[6]. Since #1757 this
+	// is flagged for make()-backed slices, and an append()-derived slice must
+	// reach the same conclusion.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{}
+	s = append(s, 10)
+	if len(s) >= 3 {
+		fmt.Println(s[6])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// #1753 follow-up: append(s) with zero variadic arguments must still be
+	// tracked as zero guaranteed growth, not silently dropped (the SSA
+	// builder lowers this to append(s, nil...), a *ssa.Const, not a
+	// *ssa.Slice).
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{1}
+	t := append(s)
+	fmt.Println(t[3])
+}
+`}, 1, gosec.NewConfig()},
+	// append() inside a loop with an in-bounds index must not be flagged --
+	// the most common real-world append() shape.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	for i := 0; i < 3; i++ {
+		s = append(s, i)
+		fmt.Println(s[i])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// Chained append() calls: the recursion must follow the growth of a
+	// nested append() result, not just a single level.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{}
+	s = append(append(s, 1), 2)
+	fmt.Println(s[5])
+}
+`}, 1, gosec.NewConfig()},
+	// A multi-element literal append() must count every added element, not
+	// just one.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := []int{}
+	s = append(s, 1, 2, 3)
+	fmt.Println(s[5])
+}
+`}, 1, gosec.NewConfig()},
+	// Bounds check on nil slice populated via append: out-of-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(s, 10)
+	fmt.Println(s[6])
+}
+`}, 1, gosec.NewConfig()},
+	// Bounds check on nil slice populated via append: valid in-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(s, 10)
+	fmt.Println(s[0])
+}
+`}, 0, gosec.NewConfig()},
+	// Bounds check on nil slice populated via append: guarded by len equality check.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(s, 10)
+	if len(s) == 3 {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// Bounds check on nil slice populated via append: guard asserts len 3, index 6 out-of-bounds.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(s, 10)
+	if len(s) == 3 {
+		fmt.Println(s[6])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Bounds check on nil slice populated via append: guard asserts len >= 3, index 2 in-bounds.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(s, 10)
+	if len(s) >= 3 {
+		fmt.Println(s[2])
+	}
+}
+`}, 0, gosec.NewConfig()},
+	// Bounds check on nil slice populated via append: guard asserts len >= 3, index 6 out-of-bounds.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(s, 10)
+	if len(s) >= 3 {
+		fmt.Println(s[6])
+	}
+}
+`}, 1, gosec.NewConfig()},
+	// Bounds check on make(..., 0, cap) slice populated via append: out-of-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0, 4)
+	s = append(s, 10)
+	fmt.Println(s[6])
+}
+`}, 1, gosec.NewConfig()},
+	// Bounds check on make(..., 0, cap) slice populated via append: in-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0, 4)
+	s = append(s, 10)
+	fmt.Println(s[0])
+}
+`}, 0, gosec.NewConfig()},
+	// Bounds check on direct indexing into append result: out-of-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := append([]int{1, 2}, 3)
+	fmt.Println(s[6])
+}
+`}, 1, gosec.NewConfig()},
+	// Bounds check on direct indexing into append result: in-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	s := append([]int{1, 2}, 3)
+	fmt.Println(s[2])
+}
+`}, 0, gosec.NewConfig()},
+	// Chained append on nil slice: out-of-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(append(s, 1), 2)
+	fmt.Println(s[5])
+}
+`}, 1, gosec.NewConfig()},
+	// Chained append on nil slice: in-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(append(s, 1), 2)
+	fmt.Println(s[1])
+}
+`}, 0, gosec.NewConfig()},
+	// Multi-element append on nil slice: out-of-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(s, 10, 20)
+	fmt.Println(s[3])
+}
+`}, 1, gosec.NewConfig()},
+	// Multi-element append on nil slice: in-bounds index.
+	{[]string{`
+package main
+
+import "fmt"
+
+func main() {
+	var s []int
+	s = append(s, 10, 20)
+	fmt.Println(s[1])
+}
+`}, 0, gosec.NewConfig()},
 }

@@ -114,6 +114,9 @@ var _ = Describe("gosec rules", func() {
 		It("should detect exported struct fields that may contain secrets and are JSON serializable", func() {
 			runner("G117", testutils.SampleCodeG117)
 		})
+		It("should detect unescaped elements passed to url.JoinPath", func() {
+			runner("G125", testutils.SampleCodeG125)
+		})
 
 		It("should detect sql injection via format strings", func() {
 			runner("G201", testutils.SampleCodeG201)
@@ -153,6 +156,10 @@ var _ = Describe("gosec rules", func() {
 
 		It("should detect poor permissions when writing to a file", func() {
 			runner("G306", testutils.SampleCodeG306)
+		})
+
+		It("should detect poor permissions when creating a file", func() {
+			runner("G307", testutils.SampleCodeG307)
 		})
 
 		It("should detect weak crypto algorithms", func() {

@@ -72,4 +72,64 @@ func main() {
 	check(err)
 }
 `}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+const weakWritePerm = 0777
+
+func main() {
+	_ = os.WriteFile("/tmp/dat1", []byte("hello"), weakWritePerm)
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+func main() {
+	_ = os.WriteFile("/tmp/dat1", []byte("hello"), 0600|0044)
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+const safeWritePerm = 0600
+
+func main() {
+	_ = os.WriteFile("/tmp/dat1", []byte("hello"), safeWritePerm)
+	_ = os.WriteFile("/tmp/dat2", []byte("hello"), os.FileMode(safeWritePerm))
+}
+`}, 0, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+func main() {
+	root, err := os.OpenRoot("/tmp")
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	_ = root.WriteFile("dat1", []byte("hello"), 0666)
+}
+`}, 1, gosec.NewConfig()},
+	{[]string{`
+package main
+
+import "os"
+
+func main() {
+	root, err := os.OpenRoot("/tmp")
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	_ = root.WriteFile("dat1", []byte("hello"), 0600)
+}
+`}, 0, gosec.NewConfig()},
 }

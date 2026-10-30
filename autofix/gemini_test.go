@@ -1,10 +1,14 @@
 package autofix
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genai"
 )
 
 func TestParseGeminiModel_AllModels(t *testing.T) {
@@ -15,9 +19,9 @@ func TestParseGeminiModel_AllModels(t *testing.T) {
 		expectErr bool
 	}{
 		{
-			name:      "gemini-3-pro-preview",
-			input:     "gemini-3-pro-preview",
-			expected:  ModelGeminiPro3,
+			name:      "gemini-3.1-pro-preview",
+			input:     "gemini-3.1-pro-preview",
+			expected:  ModelGeminiPro3_1,
 			expectErr: false,
 		},
 		{
@@ -41,8 +45,14 @@ func TestParseGeminiModel_AllModels(t *testing.T) {
 		{
 			name:      "gemini default",
 			input:     "gemini",
-			expected:  ModelGeminiPro3,
+			expected:  ModelGeminiPro3_1,
 			expectErr: false,
+		},
+		{
+			name:      "shut down gemini-3-pro-preview",
+			input:     "gemini-3-pro-preview",
+			expected:  "",
+			expectErr: true,
 		},
 		{
 			name:      "unsupported model",
@@ -142,11 +152,11 @@ func TestNewGeminiClient_ModelMapping(t *testing.T) {
 		modelInput    string
 		expectedModel GenAIModel
 	}{
-		{"gemini-3-pro-preview", ModelGeminiPro3},
+		{"gemini-3.1-pro-preview", ModelGeminiPro3_1},
 		{"gemini-2.5-pro", ModelGeminiPro2_5},
 		{"gemini-2.5-flash", ModelGeminiFlash2_5},
 		{"gemini-2.5-flash-lite", ModelGeminiFlash2_5Lite},
-		{"gemini", ModelGeminiPro3}, // Default
+		{"gemini", ModelGeminiPro3_1}, // Default
 	}
 
 	for _, tt := range tests {
@@ -175,8 +185,32 @@ func TestGeminiWrapper_ClientProperties(t *testing.T) {
 
 func TestGeminiModel_Constants(t *testing.T) {
 	// Verify model constants are properly defined
-	assert.Equal(t, ModelGeminiPro3, GenAIModel("gemini-3-pro-preview"))
+	assert.Equal(t, ModelGeminiPro3_1, GenAIModel("gemini-3.1-pro-preview"))
 	assert.Equal(t, ModelGeminiPro2_5, GenAIModel("gemini-2.5-pro"))
 	assert.Equal(t, ModelGeminiFlash2_5, GenAIModel("gemini-2.5-flash"))
 	assert.Equal(t, ModelGeminiFlash2_5Lite, GenAIModel("gemini-2.5-flash-lite"))
+}
+
+func TestGeminiGenerateSolution_CandidateWithoutContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// A candidate blocked by the safety filter has a finishReason and no content.
+		_, _ = w.Write([]byte(`{"candidates":[{"finishReason":"SAFETY","index":0}]}`))
+	}))
+	defer server.Close()
+
+	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+		APIKey:      "test-key",
+		Backend:     genai.BackendGeminiAPI,
+		HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+	})
+	require.NoError(t, err)
+
+	wrapper := &geminiWrapper{client: client, model: ModelGeminiPro3_1}
+
+	require.NotPanics(t, func() {
+		_, err = wrapper.GenerateSolution(context.Background(), "fix this")
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gemini")
 }

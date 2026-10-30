@@ -16,6 +16,8 @@ package rules
 
 import (
 	"go/ast"
+	"go/constant"
+	"go/types"
 	"regexp"
 
 	"github.com/securego/gosec/v2"
@@ -24,13 +26,26 @@ import (
 
 type badTempFile struct {
 	callListRule
-	args        *regexp.Regexp
-	argCalls    gosec.CallList
-	nestedCalls gosec.CallList
+	args          *regexp.Regexp
+	argCalls      gosec.CallList
+	nestedCalls   gosec.CallList
+	openFileCalls gosec.CallList
+}
+
+// tempPathValue resolves string compile-time constants, including named
+// constants and concatenations of constants.
+func tempPathValue(n ast.Node, c *gosec.Context) (string, bool) {
+	if expr, ok := n.(ast.Expr); ok {
+		if tv, ok := c.Info.Types[expr]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
+			return constant.StringVal(tv.Value), true
+		}
+	}
+	s, err := gosec.GetString(n)
+	return s, err == nil
 }
 
 func (t *badTempFile) findTempDirArgs(n ast.Node, c *gosec.Context, suspect ast.Node) *issue.Issue {
-	if s, e := gosec.GetString(suspect); e == nil {
+	if s, ok := tempPathValue(suspect, c); ok {
 		if gosec.RegexMatchWithCache(t.args, s) {
 			return c.NewIssue(n, t.ID(), t.What, t.Severity, t.Confidence)
 		}
@@ -51,9 +66,35 @@ func (t *badTempFile) findTempDirArgs(n ast.Node, c *gosec.Context, suspect ast.
 	return nil
 }
 
+// createsFile reports whether the flag passed to os.OpenFile is a constant
+// that includes O_CREATE. O_CREATE is looked up in the os package the code was
+// type-checked against, as its value depends on the target platform.
+func createsFile(call *ast.CallExpr, c *gosec.Context) bool {
+	_, obj := gosec.GetCallObject(call, c)
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	create, ok := obj.Pkg().Scope().Lookup("O_CREATE").(*types.Const)
+	if !ok {
+		return false
+	}
+	tv, ok := c.Info.Types[call.Args[1]]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.Int {
+		return false
+	}
+	flag, ok := constant.Int64Val(tv.Value)
+	mask, maskOK := constant.Int64Val(create.Val())
+	return ok && maskOK && flag&mask != 0
+}
+
 func (t *badTempFile) Match(n ast.Node, c *gosec.Context) (gi *issue.Issue, err error) {
 	if node := t.calls.ContainsPkgCallExpr(n, c, false); node != nil {
 		return t.findTempDirArgs(n, c, node.Args[0]), nil
+	}
+	if node := t.openFileCalls.ContainsPkgCallExpr(n, c, false); node != nil && len(node.Args) == 3 {
+		if createsFile(node, c) {
+			return t.findTempDirArgs(n, c, node.Args[0]), nil
+		}
 	}
 	return nil, nil
 }
@@ -61,13 +102,15 @@ func (t *badTempFile) Match(n ast.Node, c *gosec.Context) (gi *issue.Issue, err 
 // NewBadTempFile detects direct writes to predictable path in temporary directory
 func NewBadTempFile(id string, _ gosec.Config) (gosec.Rule, []ast.Node) {
 	rule := &badTempFile{
-		callListRule: newCallListRule(id, "File creation in shared tmp directory without using ioutil.Tempfile", issue.Medium, issue.High),
-		args:         regexp.MustCompile(`^(/(usr|var))?/tmp(/.*)?$`),
-		argCalls:     gosec.NewCallList(),
-		nestedCalls:  gosec.NewCallList(),
+		callListRule:  newCallListRule(id, "File creation in shared tmp directory without using ioutil.Tempfile", issue.Medium, issue.High),
+		args:          regexp.MustCompile(`^(/(usr|var))?/tmp(/.*)?$`),
+		argCalls:      gosec.NewCallList(),
+		nestedCalls:   gosec.NewCallList(),
+		openFileCalls: gosec.NewCallList(),
 	}
 	rule.Add("io/ioutil", "WriteFile")
 	rule.AddAll("os", "Create", "WriteFile")
+	rule.openFileCalls.Add("os", "OpenFile")
 	rule.argCalls.Add("os", "TempDir")
 	rule.nestedCalls.AddAll("path", "Join")
 	rule.nestedCalls.Add("path/filepath", "Join")

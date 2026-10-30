@@ -16,6 +16,7 @@
 package gosec
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -98,50 +100,30 @@ func (i ignores) parseLine(line string) (int, int) {
 }
 
 func (i ignores) add(file string, line string, suppressions map[string]issue.SuppressionInfo) {
-	is := []ignore{}
-	if _, ok := i[file]; ok {
-		is = i[file]
-	}
-	found := false
 	start, end := i.parseLine(line)
-	for _, ig := range is {
-		if ig.start <= start && ig.end >= end {
-			found = true
-			for r, s := range suppressions {
-				ss, ok := ig.suppressions[r]
-				if !ok {
-					ss = []issue.SuppressionInfo{}
-				}
-				ss = append(ss, s)
-				ig.suppressions[r] = ss
-			}
-			break
-		}
+	ig := ignore{
+		start:        start,
+		end:          end,
+		suppressions: make(map[string][]issue.SuppressionInfo, len(suppressions)),
 	}
-	if !found {
-		ig := ignore{
-			start:        start,
-			end:          end,
-			suppressions: map[string][]issue.SuppressionInfo{},
-		}
-		for r, s := range suppressions {
-			ig.suppressions[r] = []issue.SuppressionInfo{s}
-		}
-		is = append(is, ig)
+	for r, s := range suppressions {
+		ig.suppressions[r] = []issue.SuppressionInfo{s}
 	}
-	i[file] = is
+	// Keep each directive's range intact, even when it is nested in another.
+	i[file] = append(i[file], ig)
 }
 
 func (i ignores) get(file string, line string) map[string][]issue.SuppressionInfo {
 	start, end := i.parseLine(line)
-	if is, ok := i[file]; ok {
-		for _, i := range is {
-			if i.start <= start && i.end >= end || start <= i.start && end >= i.end {
-				return i.suppressions
+	suppressions := make(map[string][]issue.SuppressionInfo)
+	for _, ig := range i[file] {
+		if ig.start <= start && ig.end >= end || start <= ig.start && end >= ig.end {
+			for r, ss := range ig.suppressions {
+				suppressions[r] = append(suppressions[r], ss...)
 			}
 		}
 	}
-	return map[string][]issue.SuppressionInfo{}
+	return suppressions
 }
 
 // The Context is populated with data parsed from the source code as it is scanned.
@@ -436,10 +418,10 @@ func (gosec *Analyzer) load(pkgPath string, buildTags []string) ([]*packages.Pac
 
 	var packageFiles []string
 	for _, filename := range basePackage.GoFiles {
-		packageFiles = append(packageFiles, path.Join(pkgPath, filename))
+		packageFiles = append(packageFiles, filepath.Join(abspath, filename))
 	}
 	for _, filename := range basePackage.CgoFiles {
-		packageFiles = append(packageFiles, path.Join(pkgPath, filename))
+		packageFiles = append(packageFiles, filepath.Join(abspath, filename))
 	}
 
 	if gosec.tests {
@@ -447,7 +429,7 @@ func (gosec *Analyzer) load(pkgPath string, buildTags []string) ([]*packages.Pac
 		testsFiles = append(testsFiles, basePackage.TestGoFiles...)
 		testsFiles = append(testsFiles, basePackage.XTestGoFiles...)
 		for _, filename := range testsFiles {
-			packageFiles = append(packageFiles, path.Join(pkgPath, filename))
+			packageFiles = append(packageFiles, filepath.Join(abspath, filename))
 		}
 	}
 
@@ -458,14 +440,45 @@ func (gosec *Analyzer) load(pkgPath string, buildTags []string) ([]*packages.Pac
 		BuildFlags: CLIBuildTags(buildTags),
 		Tests:      gosec.tests,
 	}
+	patterns := packageFiles
 	if modRoot := FindModuleRoot(abspath); modRoot != "" {
 		conf.Dir = modRoot
+		// Load module packages as a unit. go/packages chunks long filename
+		// lists into incomplete packages, losing cross-file type information.
+		// Keep the ad-hoc file route for sources outside a module.
+		patterns = []string{abspath}
+		conf.Mode |= packages.NeedForTest
 	}
-	pkgs, err := packages.Load(conf, packageFiles...)
+	pkgs, err := packages.Load(conf, patterns...)
 	if err != nil {
 		return []*packages.Package{}, fmt.Errorf("loading files from package %q: %w", pkgPath, err)
 	}
-	return pkgs, nil
+	return gosec.selectTestVariants(pkgs), nil
+}
+
+// selectTestVariants avoids scanning a production package twice when its
+// test-augmented variant is present. External tests remain distinct packages.
+// Keep any errored base so Process can report every loader error.
+func (gosec *Analyzer) selectTestVariants(pkgs []*packages.Package) []*packages.Package {
+	if !gosec.tests {
+		return pkgs
+	}
+	augmented := make(map[string]struct{})
+	for _, pkg := range pkgs {
+		if pkg.ForTest != "" && pkg.PkgPath == pkg.ForTest {
+			augmented[pkg.PkgPath] = struct{}{}
+		}
+	}
+	selected := make([]*packages.Package, 0, len(pkgs))
+	for _, pkg := range pkgs {
+		if pkg.ForTest == "" && len(pkg.Errors) == 0 && !pkg.IllTyped {
+			if _, duplicated := augmented[pkg.PkgPath]; duplicated {
+				continue
+			}
+		}
+		selected = append(selected, pkg)
+	}
+	return selected
 }
 
 // CheckRules runs analysis on the given package.
@@ -911,7 +924,11 @@ func (v *astVisitor) Visit(n ast.Node) ast.Visitor {
 
 // updateIgnores parses comments to find and update ignored rules.
 func (v *astVisitor) updateIgnores() {
-	for c := range v.context.Comments {
+	// Keep tracked suppression justifications in source order.
+	nodes := slices.SortedFunc(maps.Keys(v.context.Comments), func(a, b ast.Node) int {
+		return cmp.Or(cmp.Compare(a.Pos(), b.Pos()), cmp.Compare(a.End(), b.End()))
+	})
+	for _, c := range nodes {
 		v.updateIgnoredRulesForNode(c)
 	}
 }
